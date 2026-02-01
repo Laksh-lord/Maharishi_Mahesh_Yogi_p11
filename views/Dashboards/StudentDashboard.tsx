@@ -15,6 +15,7 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<ComplaintCategory>('Plumbing');
   const [priority, setPriority] = useState<ComplaintPriority>('Medium');
+  const [aiSuggested, setAiSuggested] = useState(false);
 
   useEffect(() => {
     loadComplaints();
@@ -25,46 +26,55 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
     setComplaints(all.filter(c => c.studentId === user.uid).sort((a, b) => b.createdAt - a.createdAt));
   };
 
-  const determinePriorityWithAI = async (desc: string): Promise<ComplaintPriority> => {
+  const determinePriorityWithAI = async (desc: string) => {
+    if (!desc || desc.length < 10) return;
+    
+    setIsAnalyzing(true);
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `Analyze this hostel complaint and categorize its priority as 'Low', 'Medium', or 'High'. 
+        contents: `Task: Evaluate hostel maintenance priority.
+        Issue: "${desc}"
         
-        Guidelines:
-        - High: Safety hazards, major leaks, complete power failure, security issues.
-        - Medium: Functional issues that hinder daily life but aren't immediate dangers (broken fan, clogged drain).
-        - Low: Cosmetic issues, minor inconveniences, non-urgent requests.
+        Rules:
+        - High: Safety risk, total utility failure (no water/power), major leak.
+        - Medium: Major inconvenience (clogged sink, fan broken, internet down).
+        - Low: Minor/cosmetic (loose handle, flickering bulb, small noise).
         
-        Complaint: "${desc}"
-        
-        Return ONLY the word: Low, Medium, or High.`,
+        Return ONLY "Low", "Medium", or "High".`,
       });
 
-      const aiResult = response.text?.trim();
-      if (aiResult && ['Low', 'Medium', 'High'].includes(aiResult)) {
-        return aiResult as ComplaintPriority;
-      }
-      return priority;
+      const text = (response.text || "").toLowerCase();
+      let detected: ComplaintPriority = 'Medium';
+      
+      if (text.includes('high')) detected = 'High';
+      else if (text.includes('low')) detected = 'Low';
+      else if (text.includes('medium')) detected = 'Medium';
+
+      setPriority(detected);
+      setAiSuggested(true);
     } catch (error) {
-      console.error("AI Priority Check failed:", error);
-      return priority;
+      console.error("AI Priority Analysis failed:", error);
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsAnalyzing(true);
-
-    const finalPriority = await determinePriorityWithAI(description);
+    
+    // Ensure final check if user didn't trigger blur
+    if (!aiSuggested) {
+      await determinePriorityWithAI(description);
+    }
 
     const newComplaint: Complaint = {
       id: Math.random().toString(36).substr(2, 9),
       title,
       description,
       category,
-      priority: finalPriority,
+      priority,
       status: 'Submitted',
       studentId: user.uid,
       studentName: user.name,
@@ -75,12 +85,14 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
     };
 
     mockStore.saveComplaint(newComplaint);
-    setIsAnalyzing(false);
     setIsModalOpen(false);
     loadComplaints();
     
+    // Reset form
     setTitle('');
     setDescription('');
+    setAiSuggested(false);
+    setPriority('Medium');
   };
 
   const handleFeedback = (id: string, feedback: string) => {
@@ -117,12 +129,6 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             </div>
             <p className="text-slate-500 mb-6 text-lg font-medium">You have no active maintenance records.</p>
-            <button 
-              onClick={() => setIsModalOpen(true)} 
-              className="px-6 py-2 bg-indigo-50 text-indigo-700 font-bold rounded-lg hover:bg-indigo-100 transition-colors"
-            >
-              Report your first issue
-            </button>
           </div>
         ) : (
           complaints.map(complaint => (
@@ -133,26 +139,18 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
                     <StatusBadge status={complaint.status} />
                     <div className="flex items-center">
                        <PriorityBadge priority={complaint.priority} />
-                       <span className="ml-2 text-[10px] font-black text-indigo-400 uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">Verified</span>
+                       <span className="ml-2 text-[10px] font-black text-indigo-400 uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">AI Verified</span>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    Ref: {complaint.id.toUpperCase()}
-                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Ref: {complaint.id.toUpperCase()}</span>
                 </div>
                 <h3 className="text-2xl font-black text-slate-900 mb-2 group-hover:text-indigo-600 transition-colors">{complaint.title}</h3>
                 <p className="text-slate-600 text-sm mb-6 leading-relaxed line-clamp-3 italic">"{complaint.description}"</p>
                 <div className="flex flex-wrap items-center gap-4 border-t border-slate-50 pt-4">
                   <div className="flex items-center text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                    <div className="w-2 h-2 rounded-full bg-slate-300 mr-2"></div>
                     Category: <span className="text-slate-900 ml-1">{complaint.category}</span>
                   </div>
                   <div className="flex items-center text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                    <div className="w-2 h-2 rounded-full bg-slate-300 mr-2"></div>
-                    Hostel: <span className="text-slate-900 ml-1">{complaint.hostelName}</span>
-                  </div>
-                  <div className="flex items-center text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                    <div className="w-2 h-2 rounded-full bg-slate-300 mr-2"></div>
                     Submitted: <span className="text-slate-900 ml-1">{new Date(complaint.createdAt).toLocaleDateString()}</span>
                   </div>
                 </div>
@@ -187,17 +185,17 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
 
                 {complaint.status === 'Resolved' && (
                   <div className="mt-8 pt-6 border-t border-slate-200">
-                    <p className="text-[11px] font-black text-indigo-600 uppercase tracking-widest mb-3 text-center">Final Inspection Required</p>
+                    <p className="text-[11px] font-black text-indigo-600 uppercase tracking-widest mb-3 text-center">Resident Action</p>
                     <div className="grid grid-cols-1 gap-2">
                       <button onClick={() => handleFeedback(complaint.id, 'Satisfied')} className="w-full py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-all shadow-md active:scale-95">Accept Fix</button>
-                      <button onClick={() => handleFeedback(complaint.id, 'Needs improvement')} className="w-full py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all">Re-open Issue</button>
+                      <button onClick={() => handleFeedback(complaint.id, 'Needs improvement')} className="w-full py-2 bg-white border border-slate-200 text-slate-600 text-xs font-bold rounded-lg hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 transition-all">Not Fixed</button>
                     </div>
                   </div>
                 )}
                 
                 {complaint.status === 'Closed' && (
                   <div className="mt-8 p-4 bg-white rounded-xl border border-slate-100 shadow-sm text-[11px] font-medium text-slate-500 italic">
-                    <span className="block font-black text-[9px] text-slate-400 uppercase mb-1">Resident Feedback</span>
+                    <span className="block font-black text-[9px] text-slate-400 uppercase mb-1">Final Outcome</span>
                     "{complaint.feedback}"
                   </div>
                 )}
@@ -211,42 +209,37 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden animate-in fade-in zoom-in duration-300">
             <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-indigo-600 text-white">
-              <div>
-                <h2 className="text-2xl font-black tracking-tight">Report a Problem</h2>
-                <p className="text-xs text-indigo-100 opacity-80 font-medium">Issue will be logged for {user.hostelName}</p>
-              </div>
-              <button onClick={() => !isAnalyzing && setIsModalOpen(false)} className="p-2 hover:bg-white/20 rounded-full transition-colors disabled:opacity-50" disabled={isAnalyzing}>
+              <h2 className="text-2xl font-black tracking-tight">Report a Problem</h2>
+              <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-white/20 rounded-full transition-colors">
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
             <form onSubmit={handleSubmit} className="p-8 space-y-6">
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Short Summary</label>
+                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Subject</label>
                 <input
                   required
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="e.g., No water in shower"
+                  placeholder="Short summary (e.g. Bathroom Leak)"
                   className="w-full px-5 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-600 focus:outline-none transition-all font-medium"
-                  disabled={isAnalyzing}
                 />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Detailed Description</label>
+                <div className="flex justify-between items-end mb-2">
+                   <label className="block text-xs font-black text-slate-400 uppercase tracking-widest">Details</label>
+                   {isAnalyzing && <span className="text-[9px] font-black text-indigo-600 animate-pulse uppercase tracking-widest">AI analyzing severity...</span>}
+                </div>
                 <textarea
                   required
                   rows={4}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Explain the problem in detail so our AI can prioritize it..."
+                  onBlur={() => determinePriorityWithAI(description)}
+                  placeholder="Be specific. Gemini AI will automatically calculate priority for you."
                   className="w-full px-5 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-600 focus:outline-none transition-all resize-none font-medium leading-relaxed"
-                  disabled={isAnalyzing}
                 />
-                <div className="mt-2 flex items-center text-[10px] text-indigo-500 font-bold uppercase tracking-wider bg-indigo-50 p-2 rounded-lg">
-                  <svg className="w-3.5 h-3.5 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" /></svg>
-                  Gemini AI will automatically set urgency based on your text
-                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -254,8 +247,7 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value as ComplaintCategory)}
-                    className="w-full px-5 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-600 focus:outline-none appearance-none font-bold text-slate-700"
-                    disabled={isAnalyzing}
+                    className="w-full px-5 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-600 focus:outline-none font-bold text-slate-700"
                   >
                     <option value="Plumbing">Plumbing</option>
                     <option value="Electricity">Electricity</option>
@@ -266,42 +258,34 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Fallover Priority</label>
-                  <select
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value as ComplaintPriority)}
-                    className="w-full px-5 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl focus:border-indigo-600 focus:outline-none appearance-none font-bold text-slate-700"
-                    disabled={isAnalyzing}
-                  >
-                    <option value="Low">Low</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High</option>
-                  </select>
+                  <div className="flex items-center mb-2 space-x-2">
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest">Priority</label>
+                    {aiSuggested && <span className="text-[8px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-black uppercase tracking-widest">AI Pick</span>}
+                  </div>
+                  <div className={`transition-all duration-300 rounded-xl border-2 ${aiSuggested ? 'border-indigo-500 bg-indigo-50' : 'border-slate-100 bg-slate-50'}`}>
+                    <select
+                      value={priority}
+                      onChange={(e) => {
+                        setPriority(e.target.value as ComplaintPriority);
+                        setAiSuggested(false); // User overrides AI
+                      }}
+                      className="w-full px-5 py-3 bg-transparent focus:outline-none font-bold text-slate-700"
+                    >
+                      <option value="Low">Low</option>
+                      <option value="Medium">Medium</option>
+                      <option value="High">High</option>
+                    </select>
+                  </div>
                 </div>
               </div>
               <div className="pt-4 flex gap-4">
-                <button
-                  type="button"
-                  disabled={isAnalyzing}
-                  onClick={() => setIsModalOpen(false)}
-                  className="flex-1 py-4 bg-slate-50 text-slate-500 font-black uppercase tracking-widest text-xs rounded-2xl hover:bg-slate-100 transition-all disabled:opacity-50"
-                >
-                  Cancel
-                </button>
+                <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-4 bg-slate-50 text-slate-500 font-black uppercase tracking-widest text-xs rounded-2xl">Cancel</button>
                 <button
                   type="submit"
                   disabled={isAnalyzing}
-                  className="flex-[2] py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all disabled:opacity-80 disabled:cursor-not-allowed flex items-center justify-center"
+                  className="flex-[2] py-4 bg-indigo-600 text-white font-black uppercase tracking-widest text-xs rounded-2xl shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95 transition-all disabled:opacity-50"
                 >
-                  {isAnalyzing ? (
-                    <>
-                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      AI Analyzing Urgency...
-                    </>
-                  ) : 'Submit Report'}
+                  {isAnalyzing ? 'Analyzing Issue...' : 'Log Complaint'}
                 </button>
               </div>
             </form>
